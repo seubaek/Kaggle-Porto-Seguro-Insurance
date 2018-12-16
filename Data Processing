@@ -1,0 +1,336 @@
+# Worked in RStudio.
+
+library(data.table)
+library(dplyr)
+library(class)
+
+# Each object is a client and they are independent.
+
+# Both train data and test data formed with of 57 features, 
+# target and ID column.
+
+# First of all,
+# Target Column: 1: customer has filed.
+#                0: not filed. 
+
+# Next, 
+# Types of fesatures are:
+#  - ind: is column about individual or driver.
+#  - reg: is column about region.
+#  - car: is column about car.
+#  - calc: is column that are calculated feature.
+#  - cat: is column that has categorical value. 
+#  - bin: is column that has binary value. 
+#  - not_indicated: the column that doesn't have types above,
+#                   is continous or other.
+
+# Value of -1 indicate missing value from the observation. 
+
+# 17 features are binary.
+# 14 features are categorical
+# Rest of other features are are either continuous or ordinal.
+
+# Lastly the goal is:
+#   - find probability of each object will claim next year. 
+
+###################################################
+# Train data is what machine to be learned.
+train = read.csv("train.csv", header=T, sep = ",", colClasses = "numeric")
+# train data has '595,212' objects
+###################################################
+
+
+
+###################################################
+# Test data is what we need to predict test.
+test = read.csv("test.csv", header=T, sep = "," ,colClasses = "numeric")
+# test data has '892,816' objects.
+###################################################
+
+
+
+###################################################
+install.packages("corrplot")
+library(corrplot)
+
+M = cor(train)
+
+corrplot(M, method="circle")
+###################################################
+
+
+
+###################################################
+# First of all, ps_calc column with binary and catergorical values are not realted to target.
+# So, removing those column. Because it can cause curse of dimensionality. 
+train_no_calc = train[, 1:39]
+test_no_calc = test[, 1:38]
+
+# This is the proof that ps_calc column is not realted to target.
+# Other column has been marked that has relation while ps_calc column doesn't
+install.packages("corrplot")
+library(corrplot)
+
+correlation_train = cor(train)
+corrplot(correlation_train, method="circle")
+###################################################
+
+
+
+###################################################
+# Next, we need to handle with missing value.
+# There a lot of way to deal with this problem, we will approach this with
+# removing whole row where missing value exist. 
+# By the way, missing value is indicated as -1.
+
+# First of all, check whether train data has NaN value.
+train_no_calc = na.omit(train_no_calc)
+# Since, the number objects doesn't change, so there is no NaN value.
+
+# Dealing with missing value for train data
+num_missing_train = length(which(train_no_calc == -1))
+missing_row_train = unique(which(train_no_calc == -1) %% 595212)
+train_no_missing = train_no_calc[-missing_row_train, ]
+
+# Get the average value for train data
+averages_train = list()
+columns_train = c(3:7, 16,17,21:39)
+
+for(i in 1:length(columns_train)){
+  averages_train[i] = mean(train_no_missing[, columns_train[i]])
+}
+for(i in 1:length(columns_train)){
+  train_no_calc[which(train_no_calc[, columns_train[i]] == -1), columns_train[i]] = averages_train[i];
+}
+
+# Next, check whether test data has NaN value.
+test_no_calc = na.omit(test_no_calc)
+# Since, the number objects doesn't change, so there is no NaN value.
+
+# Dealing with missing value for test data
+num_missing_test = length(which(test_no_calc == -1))
+missing_row_test = unique(which(test_no_calc == -1) %% 892816)
+test_no_missing = test_no_calc[-missing_row_test, ]
+
+# Get the average value for test data
+averages_test = list()
+columns_test = c(2,3,4,5,6,15,16,20:38) 
+for(i in 1:length(columns_test)){
+  averages_test[i] = mean(test_no_missing[, columns_test[i]])
+}
+# Put average value where position is -1
+for(i in 1:length(columns_test)){
+  test_no_calc[which(test_no_calc[, columns_test[i]] == -1), columns_test[i]] = averages_test[i];
+}
+
+# Visualize the missing data
+barplot(c(num_missing_train , (nrow(train_no_missing) - sum(train_no_missing$target))), xlab = "Invalid data Vs Valid data", ylab = "Number of people", main = "Valid data Comparison" , col = "blue")
+
+# From here, eliminating entire row can cause bad affect on our prediction.
+# So, we will try one more way, fill missing value with average of column.
+###################################################
+
+
+
+###################################################
+# Since 1 indicates positive answer and 0 indicates negative answer.
+# We can get percentage by using:
+(sum(train_no_missing$target) / nrow(train_no_missing)) * 100
+# It return 4.538%
+
+# Visualize the ratio between claimed clinets and who doesn't.
+barplot(c(sum(train_no_missing$target) , length(train$id)), xlab = "Person who claimed Vs Person who doesn't claimed", ylab = "Number of people", main = "Target Comparison", col = "red")
+
+# From here, we can say the target value in train data is quite imbalanced. 
+###################################################
+
+
+
+###################################################
+# Initialize data that doens't have missing value.
+# We will use xgboost function to train and predict the test data. 
+library(xgboost)
+
+# Create xgb train data as matrix.
+# Extract all column except ID and target. 
+xgb_train_no_missing = train_no_calc[, c(3:39)]
+xgb_train_no_missing = as.matrix(xgb_train_no_missing)
+xgb_train_no_missing = xgb.DMatrix(data = xgb_train_no_missing, label = as.vector(train_no_calc$target))
+
+# Create test data as matrix.
+# Again, extract all column except ID and target. 
+xgb_test_no_missing = as.matrix(test_no_calc[, c(2:38)])
+###################################################
+
+
+
+###################################################
+# To train the given data we need few more steps.
+# Firstly, decide parameters
+#   - Mostly, value of eta problem
+# Secondly, find the best nround
+
+# As it mentioned above, we need to decide parameters. 
+# Value of eta is importatnt, because we can prevent overfitting by 
+# choosing good eta value. Value of eta should be in range [0 , 1].
+# Lower eta value is robust to overfitting. 
+# But we need to make nround(iteration) to be larger.
+# Since, we want to make good prediction, we will perform with lower eta value. 
+parameter = list(booster = "gbtree", 
+                 objective = "binary:logistic", 
+                 eta = 0.01, 
+                 subsample = 1, 
+                 colsample_bytree = 1)
+# We have tested with 2 eta value, it is listed very last section. 
+
+# Then, we need to find the best number of iterations based on what we have(parameters).
+xgb_model_no_missing = xgb.train(params = parameter,
+                                 data = xgb_train_no_missing,
+                                 nrounds = 800,
+                                 verbose = 1,
+                                 save_name = "xgboost_default.model")
+# We have tested with several nround value, it is listed very last section. 
+###################################################
+
+
+
+###################################################
+# Now we can predict.
+# We will get probability whether each object will claim in next year.
+test_result_no_missing = predict(xgb_model_no_missing, xgb_test_no_missing)
+###################################################
+
+
+
+###################################################
+# Now we need to fit data into specific format 
+# ex) id target
+#      1 0.03654
+#      2 0.03654
+#      3 0.03654
+#      4 0.03654
+#      5 0.03654
+#      6 0.03654
+# The data in target value is probability that this user will claimed next year.
+
+# Since we cannot predict the objects that has missing value.
+our_answer_1 = data.frame(cbind(test_no_calc$id, test_result_no_missing))
+colnames(our_answer_1) = c("id", "target")
+write.csv(our_answer_1, "answer_no_missing.csv", row.names = FALSE)
+###################################################
+
+
+
+###################################################
+# We can also find the importances of feature by using xgb function.
+col_names = colnames(train)
+importances = xgb.importance(col_names[3:59], model = xgb_model_no_missing)
+important_feature = importances$Feature
+
+# The importance is listed below:
+# (First element is more important feature and last element is least importnat feature)
+# [1] "ps_car_13"     "ps_reg_03"     "ps_ind_05_cat" "ps_ind_03"     "ps_ind_15"    
+# [6] "ps_ind_17_bin" "ps_reg_02"     "ps_reg_01"     "ps_car_14"     "ps_car_01_cat"
+# [11] "ps_ind_01"     "ps_car_07_cat" "ps_car_09_cat" "ps_ind_02_cat" "ps_car_11_cat"
+# [16] "ps_ind_06_bin" "ps_car_15"     "ps_car_06_cat" "ps_ind_07_bin" "ps_car_03_cat"
+# [21] "ps_ind_16_bin" "ps_car_12"     "ps_car_11"     "ps_ind_04_cat" "ps_ind_09_bin"
+# [26] "ps_car_04_cat" "ps_ind_08_bin" "ps_car_05_cat" "ps_car_02_cat" "ps_car_08_cat"
+# [31] "ps_car_10_cat" "ps_ind_18_bin" "ps_ind_12_bin" "ps_ind_14"     "ps_ind_11_bin"
+# [36] "ps_ind_13_bin"
+
+# Visualize the Frequency of importances.
+plot(seq(1,37), 
+     importances$Frequency, 
+     ylab = "Frequency" , 
+     xlab = "Features",
+     main = "Frequency plot",
+     col = "red")
+
+# Visualize the Gain of importances.
+plot(seq(1,37), 
+     importances$Gain, 
+     ylab = "Gain" , 
+     xlab = "Features",
+     main = "Gain plot",
+     col = "green")
+
+# Visualize the Cover of importances.
+plot(seq(1,37), 
+     importances$Cover, 
+     ylab = "Cover" , 
+     xlab = "Features",
+     main = "Cover plot",
+     col = "blue")
+###################################################
+
+
+
+###################################################
+# When eta = 0.3(default)
+#   When nrounds = 800
+#     - Mean of target is 0.0178
+#   When nrounds = 900
+#     - Mean of target is 0.0162
+#   When nrounds = 1000
+#     - Mean of target is 0.0148
+
+# Since lower eta is robust to overfitting, let eta to be really small. 
+# When eta = 0.03
+#   When nrounds = 800
+#     - Mean of target is 0.0348
+#   When nrounds = 900
+#     - Mean of target is 0.0343
+#   When nrounds = 1000
+#     - Mean of target is 0.0337
+###################################################
+
+
+###################################################
+# Now let's try with another approach, KNN-classification.
+
+# This is the function that I implemented.
+my_knn <- function(train, test, k) {
+  m = nrow(train)
+  n = ncol(train)
+  
+  test$target <- "NA"
+  for (i in 1:nrow(test)) {
+    print(i)
+    # Calculate the distance. 
+    distance = c()
+    for (j in 1:m) {
+      distance[j] = dist(rbind(test[i, 1:(n - 1)] , train[j, 1:(n - 1)]))
+    }
+    
+    # Find k minimum distance. 
+    k_min_distance = c()
+    for (l in 1:k) {
+      k_min_distance[l] = train[which.min(distance), n:n][[1]]
+      distance[which.min(distance)] = .Machine$integer.max
+    }
+    
+    # Find the majority and assign it to the test set.
+    test[i , n] = names(which.max(table(k_min_distance)))
+  }
+  return (test)
+}
+###################################################
+
+###################################################
+# We can use the KNN that I implemented, but it takes more than 24 hours
+# So, we use builit in function.
+# knn_test_3 = my_knn(train_no_calc[3:39], test_no_calc[2:38], 3)
+
+# When we run knn with when k = 3,
+# we got 2,579 of clients will claim next year while 888,237 of clients will not claimed.
+knn_built_in = knn(train_no_calc[3:39], test_no_calc[2:38], train_no_calc$target, k = 3)
+
+# Error rate of knn is: 0.002888613.
+###################################################
+
+
+
+
+
+
+
