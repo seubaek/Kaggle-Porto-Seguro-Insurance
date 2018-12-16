@@ -32,7 +32,7 @@ library(class)
 
 # Lastly the goal is:
 #   - find probability of each object will claim next year. 
-
+#
 ###################################################
 # Train data is what machine to be learned.
 train = read.csv("train.csv", header=T, sep = ",", colClasses = "numeric")
